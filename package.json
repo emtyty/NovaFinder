@@ -1,7 +1,7 @@
 {
   "name": "nova-directory",
   "productName": "NovaFinder",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "A powerful Mac file manager",
   "main": "out/main/index.js",
   "scripts": {
