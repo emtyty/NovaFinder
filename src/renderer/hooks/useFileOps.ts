@@ -2,6 +2,8 @@ import path from 'path-browserify'
 import { usePaneStore } from '../store/paneStore'
 import { useClipboardStore } from '../store/clipboardStore'
 import { useHistoryStore } from '../store/historyStore'
+import { askConflict, type ConflictAction } from '../store/conflictStore'
+import { useProgressStore } from '../store/progressStore'
 
 export function useFileOps(onReload?: (removedPaths?: string[]) => void) {
   const { panes, activePaneId, setSelection } = usePaneStore()
@@ -40,17 +42,55 @@ export function useFileOps(onReload?: (removedPaths?: string[]) => void) {
     if (!clipFiles.length || !operation) return
     const movePairs: { src: string; dst: string }[] = []
     const copied: string[] = []
+    // Remembered "apply to all" choice; once set, later conflicts skip the prompt.
+    let bulkAction: ConflictAction | null = null
+
+    const progress = useProgressStore.getState()
+    const showProgress = clipFiles.length >= 2
+    if (showProgress) progress.start(operation === 'cut' ? 'move' : 'copy', clipFiles.length)
+
+    let processed = 0
     for (const src of clipFiles) {
+      if (showProgress && useProgressStore.getState().isCancelled()) break
       const srcDir = path.dirname(src)
       const srcName = path.basename(src)
-      const targetName = (operation === 'copy' && srcDir === dest)
-        ? await uniqueName(dest, srcName)
-        : srcName
-      const destPath = path.join(dest, targetName)
-      if (src === destPath) continue
+      if (showProgress) progress.update(processed, srcName)
+
+      // Copy into the same folder = numbered duplicate, never a conflict.
+      const sameDirCopy = operation === 'copy' && srcDir === dest
+      let targetName = sameDirCopy ? await uniqueName(dest, srcName) : srcName
+      let destPath = path.join(dest, targetName)
+      // Pasting onto itself (e.g. cut+paste into the same folder) is a no-op.
+      if (src === destPath) { processed++; continue }
+
+      if (!sameDirCopy && await window.fs.exists(destPath)) {
+        let action: ConflictAction | null = bulkAction
+        if (!action) {
+          const st = await window.fs.stat(destPath).catch(() => null)
+          const res = await askConflict({
+            name: srcName,
+            destDir: dest,
+            isDirectory: !!st?.isDirectory,
+            remaining: clipFiles.length - processed - 1,
+          })
+          if (res.action === 'cancel') break
+          action = res.action
+          if (res.applyToAll) bulkAction = action
+        }
+        if (action === 'skip') { processed++; continue }
+        if (action === 'keepboth') {
+          targetName = await uniqueName(dest, srcName)
+          destPath = path.join(dest, targetName)
+        } else if (action === 'replace') {
+          // Move the existing target to Trash so the new item replaces it
+          // cleanly (rename onto a non-empty dir fails) and stays recoverable.
+          try { await window.fs.delete(destPath) } catch { /* proceed anyway */ }
+        }
+      }
+
       try {
         if (operation === 'cut') {
-          await window.fs.rename(src, destPath)
+          await window.fs.move(src, destPath)
           movePairs.push({ src, dst: destPath })
         } else {
           await window.fs.copy(src, destPath)
@@ -59,7 +99,11 @@ export function useFileOps(onReload?: (removedPaths?: string[]) => void) {
       } catch (e) {
         alert(`Failed to paste ${srcName}: ${e}`)
       }
+      processed++
     }
+
+    if (showProgress) { progress.update(processed, ''); progress.finish() }
+
     if (operation === 'cut') {
       clear()
       if (movePairs.length) pushHistory({ kind: 'move', pairs: movePairs })
@@ -71,10 +115,17 @@ export function useFileOps(onReload?: (removedPaths?: string[]) => void) {
 
   async function duplicate(paths: string[]) {
     const created: string[] = []
+    const progress = useProgressStore.getState()
+    const showProgress = paths.length >= 2
+    if (showProgress) progress.start('copy', paths.length)
+
+    let processed = 0
     for (const src of paths) {
+      if (showProgress && useProgressStore.getState().isCancelled()) break
       const dir = path.dirname(src)
       const ext = path.extname(src)
       const base = path.basename(src, ext)
+      if (showProgress) progress.update(processed, path.basename(src))
       const newName = await uniqueName(dir, `${base} copy${ext}`)
       try {
         const dest = path.join(dir, newName)
@@ -83,7 +134,9 @@ export function useFileOps(onReload?: (removedPaths?: string[]) => void) {
       } catch (e) {
         alert(`Duplicate failed: ${e}`)
       }
+      processed++
     }
+    if (showProgress) { progress.update(processed, ''); progress.finish() }
     if (created.length) pushHistory({ kind: 'copy', created })
     onReload?.()
   }
@@ -102,6 +155,23 @@ async function deleteFiles(paths: string[]) {
     if (pairs.length) pushHistory({ kind: 'trash', pairs })
     setSelection(activePaneId, [])
     onReload?.(pairs.map((p) => p.src))
+  }
+
+  // Permanent, irreversible delete (bypasses Trash, no undo). Confirms via a
+  // native dialog first.
+  async function deletePermanent(paths: string[]) {
+    if (!paths.length) return
+    const ok = await window.fs.confirmDelete(paths.length)
+    if (!ok) return
+    let failed: string[] = []
+    try {
+      failed = await window.fs.deletePermanent(paths)
+    } catch (e) {
+      alert(`Delete failed: ${e}`)
+    }
+    if (failed.length) alert(`Could not delete ${failed.length} item(s).`)
+    setSelection(activePaneId, [])
+    onReload?.(paths.filter((p) => !failed.includes(p)))
   }
 
   async function newFolder(parentDir: string, name: string) {
@@ -128,5 +198,5 @@ async function deleteFiles(paths: string[]) {
     onReload?.()
   }
 
-  return { cut, copy, paste, duplicate, copyPath, deleteFiles, newFolder, newFile, rename }
+  return { cut, copy, paste, duplicate, copyPath, deleteFiles, deletePermanent, newFolder, newFile, rename }
 }

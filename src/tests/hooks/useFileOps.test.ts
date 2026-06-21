@@ -18,9 +18,12 @@ const paneState = (path = '/home') => ({
 
 const mockFs = {
   exists: vi.fn().mockResolvedValue(false),
+  stat: vi.fn().mockResolvedValue({ isDirectory: false, size: 0, modified: 0, created: 0 }),
   rename: vi.fn().mockResolvedValue(undefined),
   copy: vi.fn().mockResolvedValue(undefined),
   delete: vi.fn().mockResolvedValue(undefined),
+  deletePermanent: vi.fn().mockResolvedValue([]),
+  confirmDelete: vi.fn().mockResolvedValue(true),
   trashWithUndo: vi.fn().mockImplementation(async (paths: string[]) =>
     paths.map((p) => ({ src: p, dst: `/Users/u/.Trash/${p.split('/').pop()}` })),
   ),
@@ -28,6 +31,7 @@ const mockFs = {
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
   writeClipboardText: vi.fn().mockResolvedValue(undefined),
+  writeClipboardFiles: vi.fn().mockResolvedValue(undefined),
 }
 
 beforeEach(() => {
@@ -62,11 +66,13 @@ describe('useFileOps', () => {
   })
 
   describe('paste', () => {
-    it('calls fs.rename for a cut operation', async () => {
+    it('calls fs.move for a cut operation', async () => {
+      // Cut-paste uses move() (not rename) so it survives cross-device moves
+      // (EXDEV) by falling back to copy+delete in the main process.
       useClipboardStore.setState({ files: ['/tmp/file.txt'], operation: 'cut' })
       const { result } = renderHook(() => useFileOps())
       await act(() => result.current.paste('/home'))
-      expect(mockFs.rename).toHaveBeenCalledWith('/tmp/file.txt', '/home/file.txt')
+      expect(mockFs.move).toHaveBeenCalledWith('/tmp/file.txt', '/home/file.txt')
     })
 
     it('calls fs.copy for a copy operation to a different dir', async () => {

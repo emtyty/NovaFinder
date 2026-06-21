@@ -13,6 +13,8 @@ import { useTheme } from './hooks/useTheme'
 import { usePaneStore } from './store/paneStore'
 import { useFileOps } from './hooks/useFileOps'
 import { PromptModal } from './components/PromptModal'
+import { ConflictModal } from './components/ConflictModal'
+import { ProgressOverlay } from './components/ProgressOverlay'
 import { UpdateNotification } from './components/UpdateNotification'
 import { SettingsModal } from './components/SettingsModal'
 import { useSearchStore } from './store/searchStore'
@@ -38,7 +40,7 @@ export default function App() {
   const startRenameFn = useRef<(() => void) | null>(null)
 
   const { activePaneId, panes, activeTabId, showHidden, setSelection } = usePaneStore()
-  const { duplicate, copyPath, deleteFiles } = useFileOps(handleRefresh)
+  const { duplicate, copyPath, deleteFiles, deletePermanent } = useFileOps(handleRefresh)
   const shortcuts = useSettingsStore((s) => s.shortcuts)
   const loadTags = useTagStore((s) => s.load)
   const { theme, mode: themeMode, toggle: toggleTheme } = useTheme()
@@ -86,6 +88,7 @@ export default function App() {
       case 'rename': startRenameFn.current?.(); break
       case 'duplicate': if (sel.length) duplicate(sel); break
       case 'moveToTrash': if (sel.length) deleteFiles(sel); break
+      case 'deletePermanent': if (sel.length) deletePermanent(sel); break
       case 'copyPath': if (sel.length) copyPath(sel); break
       case 'openInTerminal': window.fs.openInTerminal(pane.path, useSettingsStore.getState().terminalApp); break
       case 'quickLook': if (sel.length === 1) toggleQuickLook(sel[0]); break
@@ -174,6 +177,8 @@ export default function App() {
       {globalInfoPath && <GetInfoModal filePath={globalInfoPath} onClose={() => setGlobalInfoPath(null)} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       <PromptModal />
+      <ConflictModal />
+      <ProgressOverlay />
       <UpdateNotification />
     </div>
   )

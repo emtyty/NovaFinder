@@ -15,6 +15,7 @@ export type CommandId =
   | 'rename'
   | 'duplicate'
   | 'moveToTrash'
+  | 'deletePermanent'
   | 'copyPath'
   | 'openInTerminal'
   | 'quickLook'
@@ -37,6 +38,7 @@ export const COMMANDS: CommandDef[] = [
   { id: 'rename',         label: 'Rename',           defaultAccel: '',      needsSelection: true },
   { id: 'duplicate',      label: 'Duplicate',        defaultAccel: 'Cmd+D', needsSelection: true },
   { id: 'moveToTrash',    label: 'Move to Trash',    defaultAccel: 'Cmd+Backspace', needsSelection: true },
+  { id: 'deletePermanent', label: 'Delete Immediately', defaultAccel: 'Alt+Cmd+Backspace', needsSelection: true },
   { id: 'copyPath',       label: 'Copy Path',        defaultAccel: 'Alt+Cmd+C', needsSelection: true },
   { id: 'openInTerminal', label: 'Open in Terminal', defaultAccel: 'Alt+Cmd+T' },
   { id: 'quickLook',      label: 'Quick Look',       defaultAccel: 'Space', needsSelection: true },

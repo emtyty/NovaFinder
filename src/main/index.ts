@@ -11,14 +11,21 @@ app.setName('NovaFinder')
 // Latest shortcut overrides pushed from the renderer; used to label the File
 // menu's accelerators so they match the user's remapped in-app shortcuts.
 let shortcutOverrides: ShortcutOverrides = {}
-let mainWin: BrowserWindow | null = null
 
 ipcMain.on('menu:setShortcuts', (_e, overrides: ShortcutOverrides) => {
   shortcutOverrides = overrides || {}
-  if (mainWin) buildMenu(mainWin)
+  buildMenu()
 })
 
-function buildMenu(win: BrowserWindow) {
+// Route a command/message to whichever window is focused. The application
+// menu is process-global (shared by every window), so its click handlers must
+// target the active window rather than a captured one.
+function sendToFocused(channel: string, ...args: unknown[]) {
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  win?.webContents.send(channel, ...args)
+}
+
+function buildMenu() {
   const isMac = process.platform === 'darwin'
 
   // A File-menu item for a remappable command. The accelerator is shown for
@@ -30,7 +37,7 @@ function buildMenu(win: BrowserWindow) {
     return {
       label: def.label,
       ...(accel ? { accelerator: accel, registerAccelerator: false } : {}),
-      click: () => { win.webContents.send('app:command', id) },
+      click: () => { sendToFocused('app:command', id) },
     }
   }
 
@@ -44,11 +51,11 @@ function buildMenu(win: BrowserWindow) {
             {
               label: 'Settings…',
               accelerator: 'Cmd+,',
-              click: () => { win.webContents.send('app:open-settings') },
+              click: () => { sendToFocused('app:open-settings') },
             },
             {
               label: 'Check for Updates…',
-              click: () => { win.webContents.send('app:check-update') },
+              click: () => { sendToFocused('app:check-update') },
             },
             { type: 'separator' as const },
             { role: 'services' as const },
@@ -64,11 +71,13 @@ function buildMenu(win: BrowserWindow) {
     {
       label: 'File',
       submenu: [
+        { label: 'New Window', accelerator: 'Cmd+N', click: () => createWindow() },
+        { type: 'separator' },
         cmd('newFolder'), cmd('newFile'),
         { type: 'separator' },
         cmd('getInfo'), cmd('rename'), cmd('duplicate'),
         { type: 'separator' },
-        cmd('moveToTrash'),
+        cmd('moveToTrash'), cmd('deletePermanent'),
         { type: 'separator' },
         cmd('openInTerminal'), cmd('quickLook'), cmd('copyPath'), cmd('refresh'),
         { type: 'separator' },
@@ -88,7 +97,7 @@ function buildMenu(win: BrowserWindow) {
         ...(!app.isPackaged ? [{
           label: 'Toggle Developer Tools',
           accelerator: isMac ? 'Alt+Command+I' : 'Ctrl+Shift+I',
-          click: () => { win.webContents.toggleDevTools() },
+          click: () => { BrowserWindow.getFocusedWindow()?.webContents.toggleDevTools() },
         } as Electron.MenuItemConstructorOptions] : []),
         { type: 'separator' },
         { role: 'reload' },
@@ -141,10 +150,6 @@ function createWindow() {
     },
   })
 
-  registerWatcherHandlers(win)
-  mainWin = win
-  buildMenu(win)
-
   win.once('ready-to-show', () => win.show())
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -153,12 +158,20 @@ function createWindow() {
     win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
-  win.on('closed', () => stopAllWatchers())
+  // Per-window watcher cleanup is handled by registerWatcherHandlers via the
+  // webContents 'destroyed' event, so we must NOT stopAllWatchers here — that
+  // would kill live updates for every other open window.
+
+  return win
 }
 
 app.whenReady().then(() => {
   registerFsHandlers()
   registerTagsHandlers()
+  // Watcher IPC is registered once for the whole app (handlers are global);
+  // each window subscribes via its own webContents.
+  registerWatcherHandlers()
+  buildMenu()
   createWindow()
   setupUpdater()
 })
