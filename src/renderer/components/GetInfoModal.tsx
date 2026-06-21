@@ -9,6 +9,7 @@ type Props = {
 }
 
 type FolderSize = { size: number; files: number; folders: number }
+type Permissions = { octal: string; symbolic: string; owner: string; group: string }
 
 export function GetInfoModal({ filePath, onClose }: Props) {
   const [info, setInfo] = useState<{
@@ -21,6 +22,7 @@ export function GetInfoModal({ filePath, onClose }: Props) {
   // Folder size is computed only on demand because the walk can be slow
   // on big trees. null = idle, 'loading' = in progress, FolderSize = done.
   const [folderSize, setFolderSize] = useState<FolderSize | 'loading' | null>(null)
+  const [perms, setPerms] = useState<Permissions | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -35,6 +37,9 @@ export function GetInfoModal({ filePath, onClose }: Props) {
       }
       if (cancelled) return
       setInfo({ ...stat, childCount })
+      window.fs.permissions(filePath)
+        .then((p) => { if (!cancelled) setPerms(p) })
+        .catch(() => {})
       // Auto-calculate folder size in the background. Walk runs in the
       // main process so the UI stays responsive; if it returns fast the
       // user never sees the "Calculating…" placeholder.
@@ -105,6 +110,8 @@ export function GetInfoModal({ filePath, onClose }: Props) {
           <Row label="Where" value={path.dirname(filePath)} mono />
           {info && <Row label="Created" value={formatDate(info.created)} />}
           {info && <Row label="Modified" value={formatDate(info.modified)} />}
+          {perms && <Row label="Owner" value={`${perms.owner} : ${perms.group}`} />}
+          {perms && <Row label="Permissions" value={`${perms.symbolic}  (${perms.octal})`} mono />}
         </div>
 
         <div className="flex justify-end px-4 py-3 border-t border-[var(--border-color)] bg-[var(--header-bg)]">

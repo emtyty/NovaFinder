@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchStore } from '../store/searchStore'
+import { useSearchStore, type SearchMode } from '../store/searchStore'
 import { usePaneStore } from '../store/paneStore'
 import { smartFolderPath, useSmartFoldersStore } from '../store/smartFoldersStore'
 import { prompt } from '../store/promptStore'
+import { useSearchHistoryStore } from '../store/searchHistoryStore'
 
 const SIZE_KEYWORDS = [
   { key: 'tiny',   label: 'Tiny',   desc: '0 – 16 KB' },
@@ -22,6 +23,9 @@ export function SearchBar() {
   const { query, mode, setQuery, setMode, clear, setResults, setSearching, focusTrigger } = useSearchStore()
   const { activePaneId, panes, navigateTo } = usePaneStore()
   const addSmart = useSmartFoldersStore((s) => s.add)
+  const history = useSearchHistoryStore((s) => s.items)
+  const addHistory = useSearchHistoryStore((s) => s.add)
+  const clearHistory = useSearchHistoryStore((s) => s.clear)
   const [focused, setFocused] = useState(false)
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -97,12 +101,22 @@ export function SearchBar() {
   function apply(kw: string) {
     setQuery(`size:${kw}`)
     setMode('size')
+    addHistory({ query: `size:${kw}`, mode: 'size' })
     setOpen(false)
     inputRef.current?.blur()
   }
 
   function applyMode(m: 'name' | 'content' | 'kind') {
     setMode(m)
+    if (query.trim()) addHistory({ query: query.trim(), mode: m })
+    setOpen(false)
+    inputRef.current?.blur()
+  }
+
+  // Re-run a saved search from the history dropdown.
+  function applyHistory(item: { query: string; mode: Exclude<SearchMode, null> }) {
+    setQuery(item.query)
+    setMode(item.mode)
     setOpen(false)
     inputRef.current?.blur()
   }
@@ -139,6 +153,8 @@ export function SearchBar() {
   const sizeTyped = parseSizeKeyword(q) ?? ''
   const visibleSizes = SIZE_KEYWORDS.filter((s) => s.key.startsWith(sizeTyped))
   const showDropdown = open && q.length > 0
+  const showHistory = open && q.length === 0 && history.length > 0
+  const modeLabel: Record<string, string> = { name: 'Name', content: 'Content', kind: 'Kind', size: 'Size' }
 
   return (
     <div ref={wrapRef} className="relative [-webkit-app-region:no-drag]">
@@ -147,7 +163,7 @@ export function SearchBar() {
           ref={inputRef}
           value={query}
           onChange={(e) => handleChange(e.target.value)}
-          onFocus={() => { setFocused(true); if (query) setOpen(true) }}
+          onFocus={() => { setFocused(true); setOpen(true) }}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') onClear()
@@ -217,6 +233,9 @@ export function SearchBar() {
                   Kind: <Chip>{q}</Chip>
                 </Suggestion>
               </SuggestionGroup>
+              <div className="px-3 pt-1 pb-1.5 text-[10.5px] leading-snug text-[var(--text-muted)] whitespace-normal">
+                Tip: <code>foo bar</code> = both · <code>foo OR bar</code> = either · <code>-foo</code> = exclude · <code>/regex/i</code> = regex
+              </div>
               <SuggestionGroup title="Size">
                 <Suggestion onClick={() => { handleChange('size:'); inputRef.current?.focus() }}>
                   Filter by file size… <span className="ml-auto text-[11px] opacity-50 pl-3">size:</span>
@@ -236,6 +255,24 @@ export function SearchBar() {
               </Suggestion>
             </SuggestionGroup>
           )}
+        </div>
+      )}
+
+      {showHistory && (
+        <div
+          className="absolute right-0 top-full mt-1 nd-context-menu rounded-lg py-2 text-[13px] shadow-[0_14px_48px_rgba(0,0,0,0.35)] whitespace-nowrap"
+          style={{ minWidth: 260 }}
+        >
+          <div className="flex items-center justify-between px-3 pt-1.5 pb-0.5">
+            <span className="text-[11px] font-semibold text-[var(--text-muted)]">Recent Searches</span>
+            <button onClick={clearHistory} className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text)]">Clear</button>
+          </div>
+          {history.map((item, i) => (
+            <Suggestion key={`${item.mode}:${item.query}:${i}`} onClick={() => applyHistory(item)}>
+              <span className="opacity-50 text-[11px] w-12 flex-shrink-0">{modeLabel[item.mode] ?? item.mode}</span>
+              <span className="truncate">{item.query}</span>
+            </Suggestion>
+          ))}
         </div>
       )}
     </div>

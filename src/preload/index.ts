@@ -60,6 +60,9 @@ contextBridge.exposeInMainWorld('fs', {
   rename: (src: string, dest: string) => ipcRenderer.invoke('fs:rename', src, dest),
   copy: (src: string, dest: string) => ipcRenderer.invoke('fs:copy', src, dest),
   delete: (p: string) => ipcRenderer.invoke('fs:delete', p),
+  deletePermanent: (paths: string[]) => ipcRenderer.invoke('fs:deletePermanent', paths),
+  confirmDelete: (count: number) => ipcRenderer.invoke('dialog:confirmDelete', count),
+  permissions: (p: string) => ipcRenderer.invoke('fs:permissions', p),
   trashWithUndo: (paths: string[]) => ipcRenderer.invoke('fs:trashWithUndo', paths),
   move: (src: string, dest: string) => ipcRenderer.invoke('fs:move', src, dest),
   trashPath: () => ipcRenderer.invoke('fs:trashPath'),
@@ -154,6 +157,9 @@ declare global {
       rename(src: string, dest: string): Promise<void>
       copy(src: string, dest: string): Promise<void>
       delete(p: string): Promise<void>
+      deletePermanent(paths: string[]): Promise<string[]>
+      confirmDelete(count: number): Promise<boolean>
+      permissions(p: string): Promise<{ octal: string; symbolic: string; owner: string; group: string }>
       trashWithUndo(paths: string[]): Promise<{ src: string; dst: string }[]>
       move(src: string, dest: string): Promise<void>
       trashPath(): Promise<string>

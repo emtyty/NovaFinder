@@ -28,7 +28,7 @@ type MenuState =
 export function useFileMenu({ paneId, paneRef, reload, onRequestRename, onRequestNew }: Options) {
   const { panes, navigateTo, setSelection, newTab } = usePaneStore()
   const pane = panes[paneId]
-  const { rename, deleteFiles, paste, cut, copy, duplicate, copyPath } = useFileOps(reload)
+  const { rename, deleteFiles, deletePermanent, paste, cut, copy, duplicate, copyPath } = useFileOps(reload)
   const clipboard = useClipboardStore()
   const toggleTag = useTagStore((s) => s.toggle)
   const getTags = useTagStore((s) => s.get)
@@ -117,6 +117,7 @@ export function useFileMenu({ paneId, paneRef, reload, onRequestRename, onReques
       } },
       ...(targetIsDir ? [{ label: 'Open in Terminal' as const, icon: 'open' as const, action: () => window.fs.openInTerminal(targets[0], useSettingsStore.getState().terminalApp) }] : []),
       { label: 'Move to Trash', icon: 'trash', shortcut: sc('moveToTrash'), action: () => deleteFiles(targets), danger: true },
+      { label: 'Delete Immediately…', icon: 'trash', shortcut: sc('deletePermanent'), action: () => deletePermanent(targets), danger: true },
       { separator: true },
       { label: `Compress ${countLabel}`, icon: 'duplicate', action: () => window.fs.zip(targets).then(reload).catch(() => {}) },
       ...(targetIsZip && targets.length === 1 ? [{ label: 'Extract Here' as const, icon: 'open' as const, action: () => window.fs.unzip(targets[0]).then(reload).catch(() => {}) }] : []),

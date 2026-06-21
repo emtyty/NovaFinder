@@ -78,10 +78,18 @@ export function useDirectory(dirPath: string, showHidden: boolean) {
     if (!dirPath) return
     load(dirPath)
     window.fs.watchStart(dirPath)
+    // Coalesce bursts of watcher events into a single reload. A bulk external
+    // operation (cp of 1000 files, git checkout, npm install, …) fires many
+    // fs events; without this each one triggered a full re-read. A short
+    // trailing debounce collapses the storm into one reload after it settles.
+    let debounce: ReturnType<typeof setTimeout> | null = null
     const off = window.fs.onWatchEvent((evt) => {
-      if (evt.dirPath === dirPath) load(dirPath)
+      if (evt.dirPath !== dirPath) return
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(() => { debounce = null; load(dirPath) }, 120)
     })
     return () => {
+      if (debounce) clearTimeout(debounce)
       if (prevPath.current) window.fs.watchStop(prevPath.current)
       off()
     }

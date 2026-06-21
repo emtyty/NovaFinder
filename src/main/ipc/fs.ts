@@ -1,4 +1,4 @@
-import { ipcMain, shell, clipboard, dialog, nativeImage, app } from 'electron'
+import { ipcMain, shell, clipboard, dialog, nativeImage, app, BrowserWindow } from 'electron'
 import fs from 'fs/promises'
 import fsSync from 'fs'
 import path from 'path'
@@ -149,6 +149,42 @@ export function registerFsHandlers() {
     }
   })
 
+  // POSIX ownership + permissions for Get Info. mode/uid/gid come from stat
+  // (instant); owner/group *names* are resolved via macOS `stat -f` since
+  // Node has no built-in uid→name lookup. Name resolution is best-effort —
+  // on failure we fall back to the numeric ids.
+  ipcMain.handle('fs:permissions', async (_e, filePath: string): Promise<{
+    octal: string
+    symbolic: string
+    owner: string
+    group: string
+  }> => {
+    const st = await fs.stat(filePath)
+    const perm = st.mode & 0o777
+    const octal = perm.toString(8).padStart(3, '0')
+    const rwx = (bits: number) =>
+      (bits & 4 ? 'r' : '-') + (bits & 2 ? 'w' : '-') + (bits & 1 ? 'x' : '-')
+    const typeChar = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : '-'
+    const symbolic = typeChar + rwx((perm >> 6) & 7) + rwx((perm >> 3) & 7) + rwx(perm & 7)
+
+    let owner = String(st.uid)
+    let group = String(st.gid)
+    try {
+      const names = await new Promise<string>((resolve, reject) => {
+        execFile('/usr/bin/stat', ['-f', '%Su:%Sg', filePath], (err, stdout) => {
+          if (err) reject(err)
+          else resolve(stdout.trim())
+        })
+      })
+      const [o, g] = names.split(':')
+      if (o) owner = o
+      if (g) group = g
+    } catch {
+      // keep numeric uid/gid
+    }
+    return { octal, symbolic, owner, group }
+  })
+
   ipcMain.handle('fs:statBatch', async (_e, paths: string[]): Promise<FileEntry[]> => {
     const results = await Promise.all(
       paths.map(async (p): Promise<FileEntry | null> => {
@@ -200,6 +236,41 @@ export function registerFsHandlers() {
 
   ipcMain.handle('fs:delete', async (_e, filePath: string) => {
     await shell.trashItem(filePath)
+  })
+
+  // Native confirmation for a destructive, irreversible action. Returns true
+  // only if the user explicitly clicks Delete.
+  ipcMain.handle('dialog:confirmDelete', async (e, count: number): Promise<boolean> => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      message: count === 1
+        ? 'Are you sure you want to delete this item permanently?'
+        : `Are you sure you want to delete these ${count} items permanently?`,
+      detail: 'This action cannot be undone.',
+    }
+    const { response } = win
+      ? await dialog.showMessageBox(win, opts)
+      : await dialog.showMessageBox(opts)
+    return response === 0
+  })
+
+  // Permanent, irreversible delete (bypasses Trash). The renderer is
+  // responsible for confirming with the user first — there is no undo.
+  ipcMain.handle('fs:deletePermanent', async (_e, paths: string[]) => {
+    const failed: string[] = []
+    for (const p of paths) {
+      try {
+        await fs.rm(p, { recursive: true, force: true })
+      } catch (err) {
+        console.warn('permanent delete failed', p, err)
+        failed.push(p)
+      }
+    }
+    return failed
   })
 
   // Like fs:delete, but captures the new location in ~/.Trash for each
@@ -365,6 +436,59 @@ export function registerFsHandlers() {
     'Cache', 'Caches', '.npm', '.yarn', '.cargo', '.rustup',
   ])
 
+  // Build a text predicate from a query string supporting:
+  //   • Regex:   /pattern/flags   (e.g. /^foo.*\.tsx?$/i) — flags optional,
+  //              defaults to case-insensitive.
+  //   • Boolean: space-separated terms are ANDed; `OR` (or `|`) splits into
+  //              alternatives; a leading `-` (or `NOT `) negates a term.
+  //              e.g.  report -draft   |   2023 OR 2024   |   foo -NOT bar
+  // Plain queries with no operators behave exactly like the old substring
+  // match. Returns null if the query compiles to nothing (caller treats as
+  // "no results").
+  function buildTextMatcher(query: string): ((text: string) => boolean) | null {
+    const trimmed = query.trim()
+    if (!trimmed) return null
+
+    const rx = trimmed.match(/^\/(.+)\/([a-z]*)$/i)
+    if (rx) {
+      try {
+        const re = new RegExp(rx[1], rx[2].includes('i') ? rx[2] : rx[2] + 'i')
+        return (text: string) => re.test(text)
+      } catch {
+        return null // invalid regex → no results rather than throwing
+      }
+    }
+
+    // Split into OR alternatives, then each into AND terms (negatable).
+    const alternatives = trimmed
+      .split(/\s+OR\s+|\s*\|\s*/i)
+      .map((alt) => alt.trim())
+      .filter(Boolean)
+      .map((alt) =>
+        alt
+          .split(/\s+/)
+          .map((tok) => tok.replace(/^NOT$/i, '-')) // bare "NOT" → negate next? keep simple: treat leading - only
+          .filter((t) => t && t !== '-')
+          .map((tok) => {
+            const negate = tok.startsWith('-') && tok.length > 1
+            return { negate, needle: (negate ? tok.slice(1) : tok).toLowerCase() }
+          }),
+      )
+      .filter((terms) => terms.length > 0)
+
+    if (!alternatives.length) return null
+
+    return (text: string) => {
+      const lower = text.toLowerCase()
+      // Match if ANY alternative fully matches (all its AND terms satisfied).
+      return alternatives.some((terms) =>
+        terms.every(({ negate, needle }) =>
+          negate ? !lower.includes(needle) : lower.includes(needle),
+        ),
+      )
+    }
+  }
+
   async function walkSearch(
     dir: string,
     predicate: (entry: FileEntry) => boolean | Promise<boolean>,
@@ -423,7 +547,9 @@ export function registerFsHandlers() {
     const maxDepth = 8
 
     if (mode === 'name') {
-      return walkSearch(dirPath, (e) => e.name.toLowerCase().includes(q), maxResults, maxDepth)
+      const match = buildTextMatcher(query)
+      if (!match) return []
+      return walkSearch(dirPath, (e) => match(e.name), maxResults, maxDepth)
     }
     if (mode === 'kind') {
       return walkSearch(dirPath, (e) => !e.isDirectory && e.ext.toLowerCase().includes(q), maxResults, maxDepth)
@@ -443,13 +569,15 @@ export function registerFsHandlers() {
       return walkSearch(dirPath, (e) => !e.isDirectory && e.size >= min && e.size <= max, maxResults, maxDepth)
     }
     // content
+    const matchContent = buildTextMatcher(query)
+    if (!matchContent) return []
     return walkSearch(dirPath, async (e) => {
       if (e.isDirectory) return false
       if (!TEXT_EXTS.has(e.ext)) return false
       if (e.size > 2 * 1024 * 1024) return false
       try {
         const text = await fs.readFile(e.path, 'utf-8')
-        return text.toLowerCase().includes(q)
+        return matchContent(text)
       } catch {
         return false
       }
